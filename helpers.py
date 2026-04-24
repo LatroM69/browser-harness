@@ -214,3 +214,25 @@ def http_get(url, headers=None, timeout=20.0):
         data = r.read()
         if r.headers.get("Content-Encoding") == "gzip": data = gzip.decompress(data)
         return data.decode()
+
+# --- anti-detection ---
+def set_stealth_cookies():
+    """Set cookies to bypass common consent walls (Google, etc). Call before navigate()."""
+    # Try to set common consent cookies
+    cookies_to_set = [
+        {"name": "CONSENT", "value": "YES+en", "domain": ".google.com", "path": "/"},
+        {"name": "SOCS", "value": "DOABC", "domain": ".google.com", "path": "/"},
+    ]
+    for cookie in cookies_to_set:
+        try:
+            cdp("Network.setCookie", **cookie)
+        except Exception:
+            pass
+    
+    # Override webdriver property
+    try:
+        cdp("Page.addScriptToEvaluateOnNewDocument", source="""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined, configurable: true});
+        """)
+    except Exception:
+        pass

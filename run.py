@@ -1,3 +1,4 @@
+import os
 import sys
 
 from admin import (
@@ -36,7 +37,10 @@ def main():
             "  print(page_info())\n"
             "  PY"
         )
-    ensure_daemon()
+    env = {}
+    if cdp_ws := os.environ.get("BU_CDP_WS"):
+        env["BU_CDP_WS"] = cdp_ws
+    ensure_daemon(env=env or None)
     exec(sys.stdin.read())
 
 
