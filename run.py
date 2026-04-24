@@ -57,7 +57,10 @@ def main():
     if not args or args[0] != "-c":
         sys.exit("Usage: browser-harness -c \"print(page_info())\"")
     print_update_banner()
-    ensure_daemon()
+    env = {}
+    if cdp_ws := os.environ.get("BU_CDP_WS"):
+        env["BU_CDP_WS"] = cdp_ws
+    ensure_daemon(env=env or None)
     exec(args[1], globals())
 
 
