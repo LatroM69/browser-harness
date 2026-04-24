@@ -47,7 +47,7 @@ def drain_events():  return _send({"meta": "drain_events"})["events"]
 
 
 # --- navigation / page ---
-def goto(url):
+def goto_url(url):
     r = cdp("Page.navigate", url=url)
     d = (Path(__file__).parent / "domain-skills" / (urlparse(url).hostname or "").removeprefix("www.").split(".")[0])
     return {**r, "domain_skills": sorted(p.name for p in d.rglob("*.md"))[:10]} if d.is_dir() else r
@@ -67,7 +67,27 @@ def page_info():
     return json.loads(r["result"]["value"])
 
 # --- input ---
-def click(x, y, button="left", clicks=1):
+_debug_click_counter = 0
+
+def click_at_xy(x, y, button="left", clicks=1):
+    if os.environ.get("BH_DEBUG_CLICKS"):
+        global _debug_click_counter
+        try:
+            from PIL import Image, ImageDraw
+            dpr = js("window.devicePixelRatio") or 1
+            path = capture_screenshot(f"/tmp/debug_click_{_debug_click_counter}.png")
+            img = Image.open(path)
+            draw = ImageDraw.Draw(img)
+            px, py = int(x * dpr), int(y * dpr)
+            r = int(15 * dpr)
+            draw.ellipse([px - r, py - r, px + r, py + r], outline="red", width=int(3 * dpr))
+            draw.line([px - r - int(5 * dpr), py, px + r + int(5 * dpr), py], fill="red", width=int(2 * dpr))
+            draw.line([px, py - r - int(5 * dpr), px, py + r + int(5 * dpr)], fill="red", width=int(2 * dpr))
+            img.save(path)
+            print(f"[debug_click] saved {path} (x={x}, y={y}, dpr={dpr})")
+        except Exception as e:
+            print(f"[debug_click] overlay failed: {e}")
+        _debug_click_counter += 1
     cdp("Input.dispatchMouseEvent", type="mousePressed", x=x, y=y, button=button, clickCount=clicks)
     cdp("Input.dispatchMouseEvent", type="mouseReleased", x=x, y=y, button=button, clickCount=clicks)
 
@@ -98,7 +118,7 @@ def scroll(x, y, dy=-300, dx=0):
 
 
 # --- visual ---
-def screenshot(path="/tmp/shot.png", full=False):
+def capture_screenshot(path="/tmp/shot.png", full=False):
     r = cdp("Page.captureScreenshot", format="png", captureBeyondViewport=full)
     open(path, "wb").write(base64.b64decode(r["data"]))
     return path
@@ -140,7 +160,7 @@ def new_tab(url="about:blank"):
     tid = cdp("Target.createTarget", url="about:blank")["targetId"]
     switch_tab(tid)
     if url != "about:blank":
-        goto(url)
+        goto_url(url)
     return tid
 
 def ensure_real_tab():
@@ -178,8 +198,14 @@ def wait_for_load(timeout=15.0):
     return False
 
 def js(expression, target_id=None):
-    """Run JS in the attached tab (default) or inside an iframe target (via iframe_target())."""
+    """Run JS in the attached tab (default) or inside an iframe target (via iframe_target()).
+
+    Expressions with top-level `return` are automatically wrapped in an IIFE, so both
+    `document.title` and `const x = 1; return x` are valid inputs.
+    """
     sid = cdp("Target.attachToTarget", targetId=target_id, flatten=True)["sessionId"] if target_id else None
+    if "return " in expression:
+        expression = f"(function(){{{expression}}})()"
     r = cdp("Runtime.evaluate", session_id=sid, expression=expression, returnByValue=True, awaitPromise=True)
     return r.get("result", {}).get("value")
 
@@ -206,8 +232,17 @@ def upload_file(selector, path):
     cdp("DOM.setFileInputFiles", files=[path] if isinstance(path, str) else list(path), nodeId=nid)
 
 def http_get(url, headers=None, timeout=20.0):
-    """Pure HTTP — no browser. Use for static pages / APIs. Wrap in ThreadPoolExecutor for bulk."""
-    import urllib.request, gzip
+    """Pure HTTP — no browser. Use for static pages / APIs. Wrap in ThreadPoolExecutor for bulk.
+
+    When BROWSER_USE_API_KEY is set, routes through the fetch-use proxy (handles bot
+    detection, residential proxies, retries). Falls back to local urllib otherwise."""
+    if os.environ.get("BROWSER_USE_API_KEY"):
+        try:
+            from fetch_use import fetch_sync
+            return fetch_sync(url, headers=headers, timeout_ms=int(timeout * 1000)).text
+        except ImportError:
+            pass
+    import gzip
     h = {"User-Agent": "Mozilla/5.0", "Accept-Encoding": "gzip"}
     if headers: h.update(headers)
     with urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=timeout) as r:
